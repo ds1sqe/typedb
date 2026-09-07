@@ -278,6 +278,35 @@ fn fetch_ordered_list_attribute_binding_preserves_order() {
         r#"insert $b isa book, has tag[] ["b", "a"];"#,
     );
 
+    let literal_query = r#"match $b isa book, has tag[] $tags; $b has tag[] ["b", "a"]; fetch { "tags": $tags };"#;
+    let literal_pipeline = typeql::parse_query(literal_query).unwrap().into_structure().into_pipeline();
+    let result = query_manager.prepare_read_pipeline(
+        Arc::new(storage.clone().open_snapshot_read()),
+        &type_manager,
+        thing_manager.clone(),
+        function_manager.clone(),
+        &literal_pipeline,
+        None::<GivenRowsSimple>,
+        literal_query,
+    );
+    let err = match result {
+        Err(err) => err,
+        Ok(pipeline) => {
+            let (iterator, _) = pipeline.into_documents_iterator(ExecutionInterrupt::new_uninterruptible()).unwrap();
+            let _ = iterator.collect::<Result<Vec<_>, _>>();
+            panic!("ordered literal matching must return a typed error until supported");
+        }
+    };
+    let query::error::QueryError::Representation { typedb_source, .. } = err.as_ref() else {
+        panic!("expected representation error: {err:?}");
+    };
+    assert!(matches!(
+        typedb_source.as_ref(),
+        ir::RepresentationError::UnimplementedLanguageFeature {
+            feature: error::UnimplementedFeature::OrderedListLiteralMatch,
+        }
+    ));
+
     let query_str = r#"
     match $b isa book, has tag[] $tags;
     fetch {

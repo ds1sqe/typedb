@@ -36,10 +36,17 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PatternTranslationMode {
+    Match,
+    Write,
+}
+
 pub(super) fn add_statement(
     function_index: &impl FunctionSignatureIndex,
     conjunction: &mut ConjunctionBuilderWithContext<'_, '_>,
     stmt: &typeql::Statement,
+    mode: PatternTranslationMode,
 ) -> Result<(), Box<RepresentationError>> {
     let constraints = &mut conjunction.constraints_mut();
     match stmt {
@@ -80,7 +87,7 @@ pub(super) fn add_statement(
                 constraints.add_assignment(assigned.variable, expression, *span)?;
             }
         }
-        typeql::Statement::Thing(thing) => add_thing_statement(function_index, constraints, thing)?,
+        typeql::Statement::Thing(thing) => add_thing_statement(function_index, constraints, thing, mode)?,
         typeql::Statement::Type(type_) => add_type_statement(constraints, type_)?,
     }
     Ok(())
@@ -90,6 +97,7 @@ fn add_thing_statement(
     function_index: &impl FunctionSignatureIndex,
     constraints: &mut ConstraintsBuilder<'_, '_>,
     thing: &typeql::statement::Thing,
+    mode: PatternTranslationMode,
 ) -> Result<(), Box<RepresentationError>> {
     let var = match &thing.head {
         typeql::statement::thing::Head::Variable(var) => register_typeql_var(constraints, var)?,
@@ -107,7 +115,9 @@ fn add_thing_statement(
         match constraint {
             typeql::statement::thing::Constraint::Isa(isa) => add_typeql_isa(function_index, constraints, var, isa)?,
             typeql::statement::thing::Constraint::Iid(iid) => add_typeql_iid(constraints, var, iid)?,
-            typeql::statement::thing::Constraint::Has(has) => add_typeql_has(function_index, constraints, var, has)?,
+            typeql::statement::thing::Constraint::Has(has) => {
+                add_typeql_has(function_index, constraints, var, has, mode)?
+            }
             typeql::statement::thing::Constraint::Links(links) => {
                 add_typeql_relation(constraints, var, &links.relation)?
             }
@@ -451,6 +461,7 @@ fn add_typeql_has(
     constraints: &mut ConstraintsBuilder<'_, '_>,
     owner: Variable,
     has: &typeql::statement::thing::Has,
+    mode: PatternTranslationMode,
 ) -> Result<(), Box<RepresentationError>> {
     let type_and_ordering =
         has.type_.as_ref().map(|type_| register_typeql_type_any_as_interface(constraints, type_)).transpose()?;
@@ -460,6 +471,11 @@ fn add_typeql_has(
         typeql::statement::thing::HasValue::Expression(typeql::Expression::List(list)),
     ) = (&type_and_ordering, &has.value)
     {
+        if mode == PatternTranslationMode::Match {
+            return Err(Box::new(RepresentationError::UnimplementedLanguageFeature {
+                feature: UnimplementedFeature::OrderedListLiteralMatch,
+            }));
+        }
         for item in &list.items {
             let expression = add_typeql_expression(function_index, constraints, item)?;
             let attribute = constraints.create_anonymous_variable(item.span())?;

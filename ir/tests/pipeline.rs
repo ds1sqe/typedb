@@ -320,3 +320,43 @@ fn nested_optional_blocks_in_write() {
     );
     assert!(translation_result.is_err(), "Nested try blocks are not yet supported in write stages: {query}");
 }
+
+#[test]
+fn ordered_list_literal_matches_are_rejected_before_planning() {
+    for query in [
+        r#"match $b isa book, has tag[] ["b", "a"];"#,
+        r#"match $b isa book; { $b has tag[] ["b", "a"]; };"#,
+        r#"match $b isa book; not { $b has tag[] ["b", "a"]; };"#,
+        r#"match $b isa book; try { $b has tag[] ["b", "a"]; };"#,
+        r#"match { $b isa book, has tag[] ["b", "a"]; } or { $b isa book; };"#,
+        r#"put $b isa book, has tag[] ["b", "a"];"#,
+    ] {
+        let parsed = typeql::parse_query(query).unwrap();
+        let error =
+            translate_pipeline(&HashMapFunctionSignatureIndex::empty(), &parsed.into_structure().into_pipeline())
+                .unwrap_err();
+        assert!(
+            matches!(
+                error.as_ref(),
+                ir::RepresentationError::UnimplementedLanguageFeature {
+                    feature: error::UnimplementedFeature::OrderedListLiteralMatch,
+                }
+            ),
+            "unexpected error for {query}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn ordered_list_literals_remain_supported_in_write_stages() {
+    for query in [
+        r#"insert $b isa book, has tag[] ["b", "a"];"#,
+        r#"match $b isa book; update $b has tag[] ["b", "a"];"#,
+        r#"match $b isa book; insert try { $b has tag[] ["b", "a"]; };"#,
+        r#"match $b isa book; update try { $b has tag[] ["b", "a"]; };"#,
+    ] {
+        let parsed = typeql::parse_query(query).unwrap();
+        translate_pipeline(&HashMapFunctionSignatureIndex::empty(), &parsed.into_structure().into_pipeline())
+            .unwrap_or_else(|error| panic!("write list literal rejected for {query}: {error:?}"));
+    }
+}
